@@ -1,0 +1,1187 @@
+-- ================================================================================
+-- PREAMBLE: INITIAL CLEANUP & EXTENSIONS
+-- ================================================================================
+
+-- Drop all tables in the public schema to ensure a clean slate
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+        EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE';
+    END LOOP;
+END;
+$$;
+
+-- Enable necessary PostgreSQL extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "btree_gin";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+
+-- ================================================================================
+-- CHUNK 1: TABLE DEFINITIONS
+-- ================================================================================
+
+-- 1. USER ROLES
+CREATE TABLE IF NOT EXISTS public.user_roles (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    role_code TEXT UNIQUE NOT NULL,
+    role_name TEXT NOT NULL,
+    role_description TEXT,
+    hierarchy_level INTEGER NOT NULL,
+    permissions JSONB DEFAULT '{}',
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT valid_hierarchy_level CHECK (hierarchy_level > 0 AND hierarchy_level <= 10),
+    CONSTRAINT valid_role_code CHECK (role_code ~ '^[A-Z_]+$')
+);
+
+-- 2. WAREHOUSES
+CREATE TABLE IF NOT EXISTS public.warehouses (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    warehouse_name TEXT NOT NULL,
+    warehouse_code TEXT UNIQUE NOT NULL,
+    warehouse_initials TEXT,
+    warehouse_address JSONB NOT NULL,
+    warehouse_contact JSONB NOT NULL,
+    warehouse_settings JSONB DEFAULT '{}',
+    warehouse_capacity JSONB DEFAULT '{}',
+    business_details JSONB DEFAULT '{}',
+    default_storage_rate DECIMAL(10,2) DEFAULT 0,
+    default_labor_rate DECIMAL(10,2) DEFAULT 0,
+    timezone TEXT DEFAULT 'Asia/Kolkata',
+    currency TEXT DEFAULT 'INR',
+    gst_number TEXT,
+    license_details JSONB DEFAULT '{}',
+    is_active BOOLEAN DEFAULT true,
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT warehouse_code_uppercase CHECK (warehouse_code = UPPER(warehouse_code)),
+    CONSTRAINT warehouse_code_format CHECK (warehouse_code ~ '^[A-Z0-9]{3,10}$'),
+    CONSTRAINT positive_rates CHECK (default_storage_rate >= 0 AND default_labor_rate >= 0),
+    CONSTRAINT valid_address CHECK (warehouse_address ? 'city' AND warehouse_address ? 'state'),
+    CONSTRAINT valid_contact CHECK (warehouse_contact ? 'phone'),
+    CONSTRAINT valid_timezone CHECK (timezone ~ '^[A-Za-z_/]+$'),
+    CONSTRAINT valid_currency CHECK (currency IN ('INR', 'USD', 'EUR'))
+);
+
+-- 3. PROFILES
+CREATE TABLE IF NOT EXISTS public.profiles (
+    id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
+    warehouse_id UUID NOT NULL REFERENCES public.warehouses(id) ON DELETE CASCADE,
+    user_role_id UUID NOT NULL REFERENCES public.user_roles(id),
+    email TEXT UNIQUE NOT NULL,
+    full_name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    avatar_url TEXT,
+    employee_id TEXT,
+    department TEXT,
+    designation TEXT,
+    address JSONB,
+    emergency_contact JSONB,
+    custom_permissions JSONB DEFAULT '{}',
+    reporting_manager_id UUID REFERENCES public.profiles(id),
+    hire_date DATE,
+    salary_details JSONB,
+    is_active BOOLEAN DEFAULT true,
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    last_login TIMESTAMP WITH TIME ZONE,
+    login_attempts INTEGER DEFAULT 0,
+    account_locked_until TIMESTAMP WITH TIME ZONE,
+    session_timeout INTEGER DEFAULT 480, -- minutes
+    notes TEXT,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT valid_login_attempts CHECK (login_attempts >= 0 AND login_attempts <= 10),
+    CONSTRAINT valid_hierarchy CHECK (reporting_manager_id != id),
+    CONSTRAINT valid_email CHECK (email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
+    CONSTRAINT valid_phone CHECK (phone ~ '^[\+]?[1-9][\d\s\-\(\)]{7,15}$'),
+    CONSTRAINT valid_session_timeout CHECK (session_timeout > 0 AND session_timeout <= 1440)
+);
+
+-- 4. USER WAREHOUSE ACCESS (Junction Table)
+CREATE TABLE IF NOT EXISTS public.user_warehouse_access (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    warehouse_id UUID NOT NULL REFERENCES public.warehouses(id) ON DELETE CASCADE,
+    access_level TEXT NOT NULL DEFAULT 'full' CHECK (access_level IN ('all', 'full', 'financial', 'operational', 'limited')),
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(user_id, warehouse_id)
+);
+
+-- 5. CUSTOMERS
+CREATE TABLE IF NOT EXISTS public.customers (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    warehouse_id UUID NOT NULL REFERENCES public.warehouses(id) ON DELETE CASCADE,
+    customer_name TEXT NOT NULL,
+    customer_phone TEXT NOT NULL,
+    customer_email TEXT,
+    customer_address JSONB,
+    business_name TEXT,
+    gst_number TEXT,
+    pan_number TEXT,
+    customer_type TEXT DEFAULT 'individual' CHECK (customer_type IN ('individual', 'business', 'corporate')),
+    customer_status TEXT DEFAULT 'active' CHECK (customer_status IN ('active', 'inactive', 'blocked', 'suspended')),
+    credit_limit DECIMAL(10,2) DEFAULT 0,
+    current_outstanding DECIMAL(10,2) DEFAULT 0,
+    payment_terms TEXT DEFAULT 'immediate',
+    risk_category TEXT DEFAULT 'low' CHECK (risk_category IN ('low', 'medium', 'high')),
+    kyc_status TEXT DEFAULT 'pending' CHECK (kyc_status IN ('pending', 'verified', 'rejected')),
+    kyc_documents JSONB DEFAULT '[]',
+    last_transaction_date TIMESTAMP WITH TIME ZONE,
+    notes TEXT,
+    tags JSONB DEFAULT '[]',
+    is_active BOOLEAN DEFAULT true,
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    created_by UUID NOT NULL REFERENCES public.profiles(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(warehouse_id, customer_phone),
+    CONSTRAINT positive_credit_limit CHECK (credit_limit >= 0),
+    CONSTRAINT positive_outstanding CHECK (current_outstanding >= 0),
+    CONSTRAINT valid_email_format CHECK (customer_email IS NULL OR customer_email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
+    CONSTRAINT valid_gst_format CHECK (gst_number IS NULL OR gst_number ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'),
+    CONSTRAINT valid_pan_format CHECK (pan_number IS NULL OR pan_number ~ '^[A-Z]{5}[0-9]{4}[A-Z]{1}$')
+);
+
+-- 6. PRODUCTS
+CREATE TABLE IF NOT EXISTS public.products (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    warehouse_id UUID REFERENCES public.warehouses(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    code TEXT,
+    category TEXT,
+    subcategory TEXT,
+    rates JSONB DEFAULT '{}',
+    unit TEXT DEFAULT 'bags',
+    weight_per_unit DECIMAL(8,3), -- kg per unit
+    quality_grades JSONB DEFAULT '[]',
+    storage_requirements JSONB DEFAULT '{}',
+    handling_instructions JSONB DEFAULT '{}',
+    seasonal_rates JSONB DEFAULT '{}',
+    minimum_storage_period INTEGER DEFAULT 0, -- days
+    maximum_storage_period INTEGER, -- days
+    perishable BOOLEAN DEFAULT false,
+    hazardous BOOLEAN DEFAULT false,
+    is_active BOOLEAN DEFAULT true,
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(warehouse_id, code),
+    CONSTRAINT positive_weight CHECK (weight_per_unit IS NULL OR weight_per_unit > 0),
+    CONSTRAINT valid_storage_period CHECK (minimum_storage_period >= 0 AND (maximum_storage_period IS NULL OR maximum_storage_period > minimum_storage_period)),
+    CONSTRAINT valid_product_code CHECK (code IS NULL OR code ~ '^[A-Z0-9_-]{2,20}$')
+);
+
+-- 7. STORAGE RATES
+CREATE TABLE IF NOT EXISTS public.storage_rates (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    warehouse_id UUID NOT NULL REFERENCES public.warehouses(id) ON DELETE CASCADE,
+    product_id UUID REFERENCES public.products(id),
+    rate_type TEXT NOT NULL,
+    rate_per_unit DECIMAL(10,2) NOT NULL,
+    rate_per_day DECIMAL(10,2),
+    bulk_discount_threshold INTEGER,
+    bulk_discount_rate DECIMAL(5,2),
+    effective_from DATE NOT NULL DEFAULT CURRENT_DATE,
+    effective_to DATE,
+    applies_to TEXT DEFAULT 'all' CHECK (applies_to IN ('all', 'new_customers', 'existing_customers', 'premium_customers')),
+    is_active BOOLEAN DEFAULT true,
+    created_by UUID REFERENCES public.profiles(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(warehouse_id, rate_type, product_id, effective_from),
+    CONSTRAINT positive_rate CHECK (rate_per_unit > 0),
+    CONSTRAINT positive_daily_rate CHECK (rate_per_day IS NULL OR rate_per_day > 0),
+    CONSTRAINT valid_date_range CHECK (effective_to IS NULL OR effective_to > effective_from),
+    CONSTRAINT valid_bulk_discount CHECK ((bulk_discount_threshold IS NULL AND bulk_discount_rate IS NULL) OR (bulk_discount_threshold > 0 AND bulk_discount_rate > 0 AND bulk_discount_rate <= 100))
+);
+
+-- 8. STORAGE LOTS
+CREATE TABLE IF NOT EXISTS public.storage_lots (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    warehouse_id UUID NOT NULL REFERENCES public.warehouses(id) ON DELETE CASCADE,
+    lot_name TEXT NOT NULL,
+    capacity INTEGER NOT NULL,
+    current_occupancy INTEGER DEFAULT 0,
+    reserved_capacity INTEGER DEFAULT 0,
+    lot_type TEXT DEFAULT 'standard' CHECK (lot_type IN ('standard', 'cold_storage', 'hazardous', 'fragile', 'secure', 'premium')),
+    rate_multiplier DECIMAL(3,2) DEFAULT 1.00,
+    lot_status TEXT DEFAULT 'active' CHECK (lot_status IN ('active', 'inactive', 'maintenance', 'full', 'damaged')),
+    lot_description TEXT,
+    lot_settings JSONB DEFAULT '{}',
+    climate_control JSONB DEFAULT '{}',
+    safety_features JSONB DEFAULT '[]',
+    maintenance_schedule JSONB DEFAULT '{}',
+    last_maintenance_date DATE,
+    next_maintenance_date DATE,
+    is_active BOOLEAN DEFAULT true,
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(warehouse_id, lot_name),
+    CONSTRAINT positive_capacity CHECK (capacity > 0),
+    CONSTRAINT valid_occupancy CHECK (current_occupancy >= 0 AND current_occupancy <= capacity),
+    CONSTRAINT valid_reserved CHECK (reserved_capacity >= 0 AND (current_occupancy + reserved_capacity) <= capacity),
+    CONSTRAINT positive_rate_multiplier CHECK (rate_multiplier > 0),
+    CONSTRAINT valid_maintenance_dates CHECK (next_maintenance_date IS NULL OR last_maintenance_date IS NULL OR next_maintenance_date > last_maintenance_date)
+);
+
+-- 9. TRANSACTIONS
+CREATE TABLE IF NOT EXISTS public.transactions (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    warehouse_id UUID NOT NULL REFERENCES public.warehouses(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL REFERENCES public.customers(id) ON DELETE CASCADE,
+    product_id UUID REFERENCES public.products(id),
+    storage_lot_id UUID REFERENCES public.storage_lots(id),
+    transaction_type TEXT NOT NULL CHECK (transaction_type IN ('inflow', 'outflow')),
+    transaction_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    transaction_date_only DATE,
+    item_quantity INTEGER NOT NULL,
+    item_unit TEXT DEFAULT 'bags',
+    item_weight DECIMAL(10,3),
+    storage_date TIMESTAMP WITH TIME ZONE NOT NULL,
+    expected_outflow_date TIMESTAMP WITH TIME ZONE,
+    actual_outflow_date TIMESTAMP WITH TIME ZONE,
+    storage_rate DECIMAL(10,2),
+    base_amount DECIMAL(10,2) NOT NULL,
+    tax_amount DECIMAL(10,2) DEFAULT 0,
+    discount_amount DECIMAL(10,2) DEFAULT 0,
+    handling_charges DECIMAL(10,2) DEFAULT 0,
+    labor_charge_per_bag DECIMAL(10,2) DEFAULT 0,
+    total_labor_charges DECIMAL(10,2) DEFAULT 0,
+    total_amount DECIMAL(10,2) NOT NULL,
+    parent_transaction_id UUID REFERENCES public.transactions(id) ON DELETE CASCADE,
+    receipt_number TEXT NOT NULL,
+    status TEXT DEFAULT 'active' CHECK (status IN ('draft', 'active', 'completed', 'cancelled', 'expired')),
+    payment_status TEXT DEFAULT 'pending' CHECK (payment_status IN ('pending', 'partial', 'paid', 'overdue')),
+    labor_payment_status TEXT DEFAULT 'not_applicable' CHECK (labor_payment_status IN ('not_applicable', 'pending', 'paid', 'partially_paid')),
+    verified_by UUID REFERENCES public.profiles(id),
+    verification_date TIMESTAMP WITH TIME ZONE,
+    quality_notes TEXT,
+    moisture_content DECIMAL(5,2),
+    damage_percentage DECIMAL(5,2) DEFAULT 0,
+    weight_notes TEXT,
+    photos JSONB DEFAULT '[]',
+    documents JSONB DEFAULT '[]',
+    notes TEXT,
+    is_active BOOLEAN DEFAULT true,
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    created_by UUID NOT NULL REFERENCES public.profiles(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(warehouse_id, receipt_number),
+    CONSTRAINT positive_quantity CHECK (item_quantity > 0),
+    CONSTRAINT positive_weight CHECK (item_weight IS NULL OR item_weight > 0),
+    CONSTRAINT positive_amounts CHECK (base_amount >= 0 AND tax_amount >= 0 AND discount_amount >= 0 AND handling_charges >= 0 AND labor_charge_per_bag >= 0 AND total_labor_charges >= 0),
+    CONSTRAINT valid_total_amount CHECK (total_amount = base_amount + tax_amount - discount_amount + handling_charges + total_labor_charges),
+    CONSTRAINT valid_moisture_content CHECK (moisture_content IS NULL OR (moisture_content >= 0 AND moisture_content <= 100)),
+    CONSTRAINT valid_damage_percentage CHECK (damage_percentage >= 0 AND damage_percentage <= 100),
+    CONSTRAINT inflow_parent_null CHECK ((transaction_type = 'inflow' AND parent_transaction_id IS NULL) OR (transaction_type = 'outflow' AND parent_transaction_id IS NOT NULL)),
+    CONSTRAINT inflow_storage_fields CHECK ((transaction_type = 'inflow' AND storage_rate IS NOT NULL) OR (transaction_type = 'outflow' AND storage_rate IS NULL)),
+    CONSTRAINT valid_outflow_dates CHECK (actual_outflow_date IS NULL OR (expected_outflow_date IS NULL OR actual_outflow_date >= expected_outflow_date - INTERVAL '30 days')),
+    storage_outstanding DECIMAL(10,2) DEFAULT 0,
+    storage_paid_amount DECIMAL(10,2) DEFAULT 0,
+    storage_payment_status TEXT DEFAULT 'pending' 
+        CHECK (storage_payment_status IN ('pending', 'partial', 'paid', 'overdue'))
+);
+
+-- 10. TRANSACTION LOT DISTRIBUTION
+CREATE TABLE IF NOT EXISTS public.transaction_lot_distribution (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    transaction_id UUID NOT NULL REFERENCES public.transactions(id) ON DELETE CASCADE,
+    storage_lot_id UUID NOT NULL REFERENCES public.storage_lots(id) ON DELETE CASCADE,
+    quantity_allocated INTEGER NOT NULL,
+    weight_allocated DECIMAL(10,3),
+    allocation_date TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    allocation_status TEXT DEFAULT 'active' CHECK (allocation_status IN ('active', 'completed', 'cancelled')),
+    notes TEXT,
+    created_by UUID NOT NULL REFERENCES public.profiles(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(transaction_id, storage_lot_id)
+);
+
+-- 11. PAYMENTS
+CREATE TABLE IF NOT EXISTS public.payments (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    warehouse_id UUID NOT NULL REFERENCES public.warehouses(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL REFERENCES public.customers(id) ON DELETE CASCADE,
+    transaction_id UUID NOT NULL REFERENCES public.transactions(id) ON DELETE CASCADE,
+    payment_amount DECIMAL(10,2) NOT NULL,
+    payment_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    payment_date_only DATE,
+    payment_type TEXT DEFAULT 'storage' CHECK (payment_type IN ('storage', 'labor', 'combined', 'advance', 'penalty')),
+    payment_mode TEXT NOT NULL CHECK (payment_mode IN ('cash', 'upi', 'card', 'bank_transfer', 'cheque', 'online', 'credit', 'adjustment')),
+    payment_status TEXT DEFAULT 'completed' CHECK (payment_status IN ('pending', 'processing', 'completed', 'failed', 'refunded', 'cancelled')),
+    payment_reference TEXT,
+    receipt_number TEXT NOT NULL,
+    received_by UUID NOT NULL REFERENCES public.profiles(id),
+    verified_by UUID REFERENCES public.profiles(id),
+    verification_date TIMESTAMP WITH TIME ZONE,
+    reconciliation_status TEXT DEFAULT 'pending' CHECK (reconciliation_status IN ('pending', 'reconciled', 'disputed')),
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(warehouse_id, receipt_number),
+    CONSTRAINT positive_payment_amount CHECK (payment_amount > 0)
+);
+
+-- 12. LABOR CHARGES
+CREATE TABLE IF NOT EXISTS public.labor_charges (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    transaction_id UUID NOT NULL REFERENCES public.transactions(id) ON DELETE CASCADE,
+    warehouse_id UUID NOT NULL REFERENCES public.warehouses(id) ON DELETE CASCADE,
+    charge_per_bag DECIMAL(10,2) NOT NULL,
+    total_bags INTEGER NOT NULL,
+    total_labor_amount DECIMAL(10,2) NOT NULL,
+    payment_status TEXT DEFAULT 'pending' CHECK (payment_status IN ('pending', 'paid', 'partially_paid', 'cancelled')),
+    paid_amount DECIMAL(10,2) DEFAULT 0,
+    payment_date TIMESTAMP WITH TIME ZONE,
+    paid_by UUID REFERENCES public.profiles(id),
+    labor_type TEXT DEFAULT 'loading' CHECK (labor_type IN ('loading', 'unloading', 'handling', 'sorting', 'cleaning', 'fumigation')),
+    supervisor_id UUID REFERENCES public.profiles(id),
+    notes TEXT,
+    created_by UUID NOT NULL REFERENCES public.profiles(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT positive_charge CHECK (charge_per_bag > 0),
+    CONSTRAINT positive_bags CHECK (total_bags > 0),
+    CONSTRAINT valid_paid_amount CHECK (paid_amount >= 0 AND paid_amount <= total_labor_amount),
+    CONSTRAINT consistent_amounts CHECK (total_labor_amount = charge_per_bag * total_bags)
+);
+
+-- 13. AUDIT LOGS
+CREATE TABLE IF NOT EXISTS public.audit_logs (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    table_name TEXT NOT NULL,
+    record_id UUID NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('INSERT', 'UPDATE', 'DELETE')),
+    old_values JSONB,
+    new_values JSONB,
+    changed_fields TEXT[],
+    user_id UUID,
+    warehouse_id UUID,
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT valid_action_data CHECK (
+        (action = 'INSERT' AND old_values IS NULL AND new_values IS NOT NULL) OR
+        (action = 'UPDATE' AND old_values IS NOT NULL AND new_values IS NOT NULL) OR
+        (action = 'DELETE' AND old_values IS NOT NULL AND new_values IS NULL)
+    )
+);
+
+-- 14. NOTIFICATIONS
+CREATE TABLE IF NOT EXISTS public.notifications (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    warehouse_id UUID REFERENCES public.warehouses(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+    notification_type TEXT NOT NULL CHECK (notification_type IN ('payment_due', 'storage_full', 'expiry_warning', 'maintenance_due', 'system_alert')),
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    priority TEXT DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
+    related_entity_type TEXT,
+    related_entity_id UUID,
+    is_read BOOLEAN DEFAULT false,
+    read_at TIMESTAMP WITH TIME ZONE,
+    expires_at TIMESTAMP WITH TIME ZONE,
+    actions JSONB DEFAULT '[]',
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT valid_read_status CHECK ((is_read = false AND read_at IS NULL) OR (is_read = true AND read_at IS NOT NULL))
+);
+
+-- 15. OTP CODES
+CREATE TABLE IF NOT EXISTS public.otp_codes (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    phone_number VARCHAR(20) NOT NULL,
+    otp_code VARCHAR(6) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    used_at TIMESTAMP WITH TIME ZONE
+);
+
+
+-- ================================================================================
+-- CHUNK 2: FUNCTIONS
+-- ================================================================================
+
+-- Function to generate a unique employee ID.
+CREATE OR REPLACE FUNCTION set_employee_id()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    warehouse_initials TEXT;
+    today_date TEXT;
+    next_seq INT;
+    new_employee_id TEXT;
+BEGIN
+    IF NEW.employee_id IS NULL THEN
+        SELECT w.warehouse_initials INTO warehouse_initials
+        FROM warehouses w 
+        WHERE w.id = NEW.warehouse_id;
+        
+        IF warehouse_initials IS NULL THEN
+            warehouse_initials := 'EMP';
+        END IF;
+        
+        today_date := TO_CHAR(NEW.created_at, 'YYMMDD');
+        
+        SELECT COALESCE(MAX(CAST(RIGHT(employee_id, 4) AS INT)), 0) + 1
+        INTO next_seq
+        FROM profiles
+        WHERE employee_id LIKE warehouse_initials || today_date || '%';
+        
+        new_employee_id := warehouse_initials || today_date || LPAD(next_seq::TEXT, 4, '0');
+        
+        NEW.employee_id := new_employee_id;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+-- Helper function to generate warehouse initials.
+CREATE OR REPLACE FUNCTION get_warehouse_initials(warehouse_name TEXT)
+RETURNS TEXT LANGUAGE plpgsql AS $$
+DECLARE
+    initials TEXT := '';
+    word TEXT;
+    words TEXT[];
+BEGIN
+    words := string_to_array(upper(trim(warehouse_name)), ' ');
+    FOREACH word IN ARRAY words LOOP
+        IF word NOT IN ('AND', 'THE', 'OF', 'FOR', 'IN', 'ON', 'AT', 'TO', 'A', 'AN', '&') AND length(word) > 0 THEN
+            initials := initials || left(word, 1);
+        END IF;
+    END LOOP;
+    IF length(initials) < 2 THEN
+        initials := left(replace(upper(warehouse_name), ' ', ''), 2);
+    END IF;
+    RETURN left(initials, 3);
+END;
+$$;
+
+-- Trigger function to set warehouse initials.
+CREATE OR REPLACE FUNCTION set_warehouse_initials()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.warehouse_initials := get_warehouse_initials(NEW.warehouse_name);
+    NEW.updated_at := NOW();
+    RETURN NEW;
+END;
+$$;
+
+-- Trigger function to sync transaction_date with a date-only column.
+CREATE OR REPLACE FUNCTION set_transaction_date_only()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.transaction_date_only := (NEW.transaction_date AT TIME ZONE 'Asia/Kolkata')::date;
+  RETURN NEW;
+END;
+$$;
+
+-- Trigger function to sync payment_date with a date-only column.
+CREATE OR REPLACE FUNCTION set_payment_date_only()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.payment_date_only := (NEW.payment_date AT TIME ZONE 'Asia/Kolkata')::date;
+  RETURN NEW;
+END;
+$$;
+
+-- Function to generate a unique receipt number.
+CREATE OR REPLACE FUNCTION generate_receipt_number()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    warehouse_initials TEXT;
+    today_date TEXT;
+    today_prefix TEXT;
+    next_seq INT;
+    new_receipt TEXT;
+    prefix TEXT;
+    max_attempts INT := 10;
+    attempt INT := 0;
+BEGIN
+    IF NEW.receipt_number IS NOT NULL AND NEW.receipt_number != '' THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.transaction_type = 'inflow' THEN
+        prefix := 'IN';
+    ELSIF NEW.transaction_type = 'outflow' THEN
+        prefix := 'OUT';
+    ELSE
+        RAISE EXCEPTION 'Invalid transaction type: %', NEW.transaction_type;
+    END IF;
+
+    SELECT w.warehouse_initials INTO warehouse_initials
+    FROM warehouses w WHERE w.id = NEW.warehouse_id;
+
+    IF warehouse_initials IS NULL THEN
+        RAISE EXCEPTION 'Warehouse initials not found for warehouse_id: %', NEW.warehouse_id;
+    END IF;
+
+    today_date := TO_CHAR(NEW.transaction_date, 'YYMMDD');
+    today_prefix := prefix || warehouse_initials || today_date;
+
+    LOOP
+        SELECT COALESCE(MAX(CAST(RIGHT(receipt_number, 3) AS INT)), 0) + 1
+        INTO next_seq
+        FROM transactions
+        WHERE warehouse_id = NEW.warehouse_id AND receipt_number LIKE today_prefix || '%';
+
+        new_receipt := today_prefix || LPAD(next_seq::TEXT, 3, '0');
+
+        IF NOT EXISTS (SELECT 1 FROM transactions WHERE warehouse_id = NEW.warehouse_id AND receipt_number = new_receipt) THEN
+            NEW.receipt_number := new_receipt;
+            EXIT;
+        END IF;
+
+        attempt := attempt + 1;
+        IF attempt >= max_attempts THEN
+            RAISE EXCEPTION 'Unable to generate unique receipt number after % attempts', max_attempts;
+        END IF;
+        PERFORM pg_sleep(0.01);
+    END LOOP;
+
+    RETURN NEW;
+END;
+$$;
+
+-- Function to handle labor charges on insert.
+CREATE OR REPLACE FUNCTION handle_labor_charges_on_insert()
+RETURNS TRIGGER AS $$
+DECLARE
+    calculated_labor_charges DECIMAL(10,2);
+    new_total_amount DECIMAL(10,2);
+BEGIN
+    -- Only create labor charges for inflow transactions
+    IF NEW.transaction_type = 'inflow' AND NEW.labor_charge_per_bag IS NOT NULL AND NEW.labor_charge_per_bag > 0 THEN
+        calculated_labor_charges := NEW.labor_charge_per_bag * NEW.item_quantity;
+        new_total_amount := NEW.total_amount + calculated_labor_charges;
+
+        -- Update the transaction record with calculated values
+        UPDATE public.transactions 
+        SET 
+            total_labor_charges = calculated_labor_charges,
+            total_amount = new_total_amount,
+            labor_payment_status = 'pending',
+            updated_at = NOW()
+        WHERE id = NEW.id;
+
+        -- Create labor charges record
+        INSERT INTO public.labor_charges
+          (transaction_id, warehouse_id, charge_per_bag, total_bags, total_labor_amount, payment_status, created_by, labor_type)
+        VALUES
+          (NEW.id, NEW.warehouse_id, NEW.labor_charge_per_bag, NEW.item_quantity, calculated_labor_charges, 'pending', NEW.created_by, 'unloading');
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to get available storage lots.
+CREATE OR REPLACE FUNCTION get_available_lots(warehouse_uuid UUID, required_capacity INTEGER DEFAULT 0)
+RETURNS TABLE(lot_id UUID, lot_name TEXT, capacity INTEGER, current_occupancy INTEGER, reserved_capacity INTEGER, available_capacity INTEGER)
+LANGUAGE plpgsql AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        sl.id as lot_id,
+        sl.lot_name,
+        sl.capacity,
+        sl.current_occupancy,
+        COALESCE(sl.reserved_capacity, 0) as reserved_capacity,
+        (sl.capacity - sl.current_occupancy - COALESCE(sl.reserved_capacity, 0)) as available_capacity
+    FROM storage_lots sl
+    WHERE sl.warehouse_id = warehouse_uuid
+      AND sl.is_active = true
+      AND sl.deleted_at IS NULL
+      AND sl.lot_status = 'active'
+      AND (sl.capacity - sl.current_occupancy - COALESCE(sl.reserved_capacity, 0)) >= required_capacity
+    ORDER BY available_capacity DESC, sl.lot_name;
+END;
+$$;
+
+-- Function to distribute items across lots.
+CREATE OR REPLACE FUNCTION distribute_bags_across_lots(transaction_uuid UUID, warehouse_uuid UUID, total_bags INTEGER, created_by_uuid UUID)
+RETURNS TABLE(lot_id UUID, lot_name TEXT, allocated_quantity INTEGER, remaining_capacity INTEGER)
+LANGUAGE plpgsql AS $$
+DECLARE
+    remaining_bags INTEGER := total_bags;
+    current_lot RECORD;
+    allocated_qty INTEGER;
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM transactions WHERE id = transaction_uuid) THEN
+        RAISE EXCEPTION 'Transaction not found: %', transaction_uuid;
+    END IF;
+
+    DELETE FROM transaction_lot_distribution WHERE transaction_id = transaction_uuid;
+
+    FOR current_lot IN SELECT * FROM get_available_lots(warehouse_uuid, 1) ORDER BY available_capacity DESC LOOP
+        EXIT WHEN remaining_bags <= 0;
+        allocated_qty := LEAST(remaining_bags, current_lot.available_capacity);
+
+        INSERT INTO transaction_lot_distribution (transaction_id, storage_lot_id, quantity_allocated, created_by)
+        VALUES (transaction_uuid, current_lot.lot_id, allocated_qty, created_by_uuid);
+
+        UPDATE storage_lots
+        SET current_occupancy = current_occupancy + allocated_qty, updated_at = NOW()
+        WHERE id = current_lot.lot_id;
+
+        remaining_bags := remaining_bags - allocated_qty;
+
+        RETURN QUERY SELECT current_lot.lot_id, current_lot.lot_name, allocated_qty, (current_lot.available_capacity - allocated_qty) as remaining_capacity;
+    END LOOP;
+
+    IF remaining_bags > 0 THEN
+        RAISE EXCEPTION 'Insufficient lot capacity. Could not allocate % bags.', remaining_bags;
+    END IF;
+END;
+$$;
+
+-- Function to update a customer's outstanding balance.
+CREATE OR REPLACE FUNCTION update_customer_outstanding()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    customer_uuid UUID;
+    warehouse_uuid UUID;
+    total_outstanding DECIMAL(10,2);
+BEGIN
+    IF TG_OP IN ('INSERT', 'UPDATE') THEN
+        customer_uuid := NEW.customer_id;
+        warehouse_uuid := NEW.warehouse_id;
+    ELSE
+        customer_uuid := OLD.customer_id;
+        warehouse_uuid := OLD.warehouse_id;
+    END IF;
+
+    IF customer_uuid IS NULL OR warehouse_uuid IS NULL THEN
+        RETURN COALESCE(NEW, OLD);
+    END IF;
+
+    SELECT COALESCE(SUM(t.total_amount - COALESCE(p.total_paid, 0)), 0)
+    INTO total_outstanding
+    FROM transactions t
+    LEFT JOIN (
+        SELECT transaction_id, SUM(payment_amount) as total_paid
+        FROM payments
+        WHERE payment_status = 'completed'
+        GROUP BY transaction_id
+    ) p ON t.id = p.transaction_id
+    WHERE t.customer_id = customer_uuid
+      AND t.warehouse_id = warehouse_uuid
+      AND t.is_active = true
+      AND t.deleted_at IS NULL;
+
+    UPDATE customers
+    SET current_outstanding = total_outstanding,
+        last_transaction_date = NOW(),
+        updated_at = NOW()
+    WHERE id = customer_uuid;
+
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+-- Generic audit trigger function.
+CREATE OR REPLACE FUNCTION audit_trigger_function()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    old_data JSONB;
+    new_data JSONB;
+    changed_fields TEXT[];
+    warehouse_uuid UUID;
+BEGIN
+    IF TG_TABLE_NAME = 'audit_logs' THEN
+        RETURN COALESCE(NEW, OLD);
+    END IF;
+
+    IF TG_OP IN ('INSERT', 'UPDATE') AND NEW IS NOT NULL THEN
+        warehouse_uuid := (to_jsonb(NEW) ->> 'warehouse_id')::UUID;
+    ELSIF TG_OP = 'DELETE' AND OLD IS NOT NULL THEN
+        warehouse_uuid := (to_jsonb(OLD) ->> 'warehouse_id')::UUID;
+    END IF;
+
+    IF TG_OP = 'INSERT' THEN
+        new_data := to_jsonb(NEW);
+        old_data := NULL;
+        changed_fields := ARRAY(SELECT jsonb_object_keys(new_data));
+    ELSIF TG_OP = 'UPDATE' THEN
+        old_data := to_jsonb(OLD);
+        new_data := to_jsonb(NEW);
+        SELECT ARRAY_AGG(key) INTO changed_fields
+        FROM jsonb_each(new_data) n
+        JOIN jsonb_each(old_data) o ON n.key = o.key
+        WHERE n.value IS DISTINCT FROM o.value;
+    ELSIF TG_OP = 'DELETE' THEN
+        old_data := to_jsonb(OLD);
+        new_data := NULL;
+        changed_fields := ARRAY(SELECT jsonb_object_keys(old_data));
+    END IF;
+
+    INSERT INTO audit_logs (table_name, record_id, action, old_values, new_values, changed_fields, user_id, warehouse_id)
+    VALUES (TG_TABLE_NAME, COALESCE((new_data ->> 'id')::UUID, (old_data ->> 'id')::UUID), TG_OP, old_data, new_data, changed_fields, auth.uid(), warehouse_uuid);
+
+    RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+-- Function to get a user's access level for RLS policies.
+CREATE OR REPLACE FUNCTION get_user_warehouse_access(user_uuid UUID)
+RETURNS TABLE(warehouse_id UUID, access_level TEXT)
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        uwa.warehouse_id,
+        uwa.access_level
+    FROM user_warehouse_access uwa
+    WHERE uwa.user_id = user_uuid
+      AND uwa.is_active = TRUE;
+END;
+$$;
+
+-- Function to handle new user sign-ups.
+CREATE OR REPLACE FUNCTION handle_new_user()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+    default_warehouse_id UUID;
+    super_admin_role_id UUID;
+BEGIN
+    SELECT id INTO default_warehouse_id FROM warehouses WHERE warehouse_code = 'DEFAULT' LIMIT 1;
+    IF default_warehouse_id IS NULL THEN
+        INSERT INTO warehouses (warehouse_name, warehouse_code, warehouse_address, warehouse_contact)
+        VALUES ('Default Warehouse', 'DEFAULT', '{"city": "Default", "state": "Default"}', '{"phone": "0000000000"}')
+        RETURNING id INTO default_warehouse_id;
+    END IF;
+
+    SELECT id INTO super_admin_role_id FROM user_roles WHERE role_code = 'SUPER_ADMIN' LIMIT 1;
+
+    INSERT INTO profiles (id, warehouse_id, user_role_id, email, full_name, phone)
+    VALUES (NEW.id, default_warehouse_id, super_admin_role_id, NEW.email, COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email), COALESCE(NEW.phone, ''));
+
+    RETURN NEW;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE WARNING 'Failed to create profile for user %: %', NEW.id, SQLERRM;
+        RETURN NEW;
+END;
+$$;
+
+-- Helper function for timezone-specific date indexing.
+CREATE OR REPLACE FUNCTION payment_date_ist(payment_ts timestamptz)
+RETURNS date
+LANGUAGE sql
+IMMUTABLE
+STRICT
+AS $$
+    SELECT CAST($1 AT TIME ZONE 'Asia/Kolkata' AS date);
+$$;
+
+CREATE OR REPLACE FUNCTION update_storage_outstanding()
+RETURNS TRIGGER AS $$
+DECLARE
+    transaction_record RECORD;
+    total_paid DECIMAL(10,2);
+BEGIN
+    -- Get transaction details
+    SELECT * INTO transaction_record
+    FROM transactions
+    WHERE id = NEW.transaction_id;
+    
+    -- Calculate total paid for storage
+    SELECT COALESCE(SUM(payment_amount), 0)
+    INTO total_paid
+    FROM payments
+    WHERE transaction_id = NEW.transaction_id
+      AND payment_type IN ('storage', 'combined')
+      AND payment_status = 'completed';
+    
+    -- Update transaction outstanding
+    UPDATE transactions
+    SET 
+        storage_paid_amount = total_paid,
+        storage_outstanding = base_amount - total_paid,
+        storage_payment_status = CASE
+            WHEN total_paid = 0 THEN 'pending'
+            WHEN total_paid >= base_amount THEN 'paid'
+            ELSE 'partial'
+        END
+    WHERE id = NEW.transaction_id;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ================================================================================
+-- CHUNK 3: TRIGGERS
+-- ================================================================================
+
+-- Trigger to set warehouse initials on insert/update.
+CREATE TRIGGER warehouse_initials_trigger
+BEFORE INSERT OR UPDATE OF warehouse_name ON warehouses
+FOR EACH ROW EXECUTE FUNCTION set_warehouse_initials();
+
+-- Trigger to populate the date-only column for transactions.
+CREATE TRIGGER set_transaction_date_only_trigger
+BEFORE INSERT OR UPDATE ON transactions
+FOR EACH ROW EXECUTE FUNCTION set_transaction_date_only();
+
+-- Trigger to populate the date-only column for payments.
+CREATE TRIGGER set_payment_date_only_trigger
+BEFORE INSERT OR UPDATE ON payments
+FOR EACH ROW EXECUTE FUNCTION set_payment_date_only();
+
+-- Trigger to generate a receipt number before inserting a transaction.
+CREATE TRIGGER receipt_number_trigger
+BEFORE INSERT ON transactions
+FOR EACH ROW EXECUTE FUNCTION generate_receipt_number();
+
+-- Trigger to handle labor charges on insert.
+CREATE TRIGGER transactions_labor_charge_trigger
+AFTER INSERT ON transactions
+FOR EACH ROW
+EXECUTE FUNCTION handle_labor_charges_on_insert();
+
+-- Trigger to update customer outstanding balance after transaction changes.
+CREATE TRIGGER update_customer_outstanding_trigger
+AFTER INSERT OR UPDATE OR DELETE ON transactions
+FOR EACH ROW EXECUTE FUNCTION update_customer_outstanding();
+
+-- Trigger to update customer outstanding balance after payment changes.
+CREATE TRIGGER update_customer_outstanding_payment_trigger
+AFTER INSERT OR UPDATE OR DELETE ON payments
+FOR EACH ROW EXECUTE FUNCTION update_customer_outstanding();
+
+-- Audit triggers for key tables.
+CREATE TRIGGER audit_warehouses_trigger AFTER INSERT OR UPDATE OR DELETE ON warehouses FOR EACH ROW EXECUTE FUNCTION audit_trigger_function();
+CREATE TRIGGER audit_customers_trigger AFTER INSERT OR UPDATE OR DELETE ON customers FOR EACH ROW EXECUTE FUNCTION audit_trigger_function();
+CREATE TRIGGER audit_transactions_trigger AFTER INSERT OR UPDATE OR DELETE ON transactions FOR EACH ROW EXECUTE FUNCTION audit_trigger_function();
+CREATE TRIGGER audit_payments_trigger AFTER INSERT OR UPDATE OR DELETE ON payments FOR EACH ROW EXECUTE FUNCTION audit_trigger_function();
+
+-- Trigger to create a profile when a new user signs up in Supabase Auth.
+CREATE TRIGGER on_auth_user_created
+AFTER INSERT ON auth.users
+FOR EACH ROW EXECUTE FUNCTION handle_new_user();
+
+-- Trigger for employee ID generation
+CREATE TRIGGER set_employee_id_trigger
+BEFORE INSERT ON profiles
+FOR EACH ROW
+EXECUTE FUNCTION set_employee_id();
+
+-- Create trigger for storage outstanding updates
+CREATE TRIGGER update_storage_outstanding_trigger
+AFTER INSERT OR UPDATE OR DELETE ON payments
+FOR EACH ROW EXECUTE FUNCTION update_storage_outstanding();
+
+
+-- ================================================================================
+-- CHUNK 4: REPORTING & DASHBOARD VIEWS
+-- ================================================================================
+
+-- View for active storage details with lot information.
+CREATE OR REPLACE VIEW active_storage_with_lots AS
+SELECT
+    t.warehouse_id,
+    w.warehouse_name,
+    t.id AS transaction_id,
+    t.receipt_number,
+    c.customer_name,
+    c.customer_phone,
+    (t.item_quantity - COALESCE((SELECT SUM(out_t.item_quantity) FROM transactions out_t WHERE out_t.parent_transaction_id = t.id AND out_t.is_active = true), 0)) AS remaining_quantity,
+    (SELECT STRING_AGG(sl.lot_name, ', ') FROM transaction_lot_distribution tld JOIN storage_lots sl ON tld.storage_lot_id = sl.id WHERE tld.transaction_id = t.id) AS allocated_lots,
+    t.storage_date,
+    EXTRACT(DAYS FROM NOW() - t.storage_date) AS days_stored,
+    CASE
+        WHEN t.expected_outflow_date IS NOT NULL AND t.expected_outflow_date < NOW() THEN 'overdue'
+        WHEN t.expected_outflow_date IS NOT NULL AND t.expected_outflow_date < NOW() + INTERVAL '7 days' THEN 'due_soon'
+        ELSE 'normal'
+    END AS urgency_status
+FROM transactions t
+JOIN warehouses w ON t.warehouse_id = w.id
+JOIN customers c ON t.customer_id = c.id
+WHERE t.transaction_type = 'inflow'
+  AND t.status = 'active'
+  AND (t.item_quantity - COALESCE((SELECT SUM(out_t.item_quantity) FROM transactions out_t WHERE out_t.parent_transaction_id = t.id AND out_t.is_active = true), 0)) > 0;
+
+-- View for storage lot utilization and status.
+CREATE OR REPLACE VIEW lot_utilization AS
+SELECT
+    w.id AS warehouse_id,
+    w.warehouse_name,
+    sl.lot_name,
+    sl.capacity,
+    sl.current_occupancy,
+    ROUND((sl.current_occupancy::DECIMAL / sl.capacity * 100), 2) AS utilization_percentage,
+    sl.lot_status,
+    CASE
+        WHEN sl.next_maintenance_date IS NOT NULL AND sl.next_maintenance_date <= NOW() + INTERVAL '7 days' THEN 'maintenance_due'
+        WHEN (sl.current_occupancy::DECIMAL / sl.capacity) >= 0.9 THEN 'near_full'
+        ELSE 'normal'
+    END AS alert_status
+FROM storage_lots sl
+JOIN warehouses w ON sl.warehouse_id = w.id
+WHERE sl.is_active = true;
+
+-- View for customer financials and credit status.
+CREATE OR REPLACE VIEW customer_outstanding_enhanced AS
+SELECT
+    c.warehouse_id,
+    w.warehouse_name,
+    c.id AS customer_id,
+    c.customer_name,
+    c.customer_phone,
+    c.current_outstanding,
+    c.credit_limit,
+    c.last_transaction_date,
+    CASE
+        WHEN c.current_outstanding > c.credit_limit AND c.credit_limit > 0 THEN 'OVER_LIMIT'
+        WHEN c.current_outstanding > 0 AND c.last_transaction_date < NOW() - INTERVAL '30 days' THEN 'OVERDUE'
+        ELSE 'NORMAL'
+    END AS credit_status
+FROM customers c
+JOIN warehouses w ON c.warehouse_id = w.id
+WHERE c.is_active = true;
+
+-- View providing a high-level summary for a warehouse dashboard.
+CREATE OR REPLACE VIEW warehouse_dashboard_enhanced AS
+SELECT
+    w.id AS warehouse_id,
+    w.warehouse_name,
+    (SELECT COUNT(*) FROM active_storage_with_lots aswl WHERE aswl.warehouse_id = w.id) AS active_storage_count,
+    (SELECT SUM(remaining_quantity) FROM active_storage_with_lots aswl WHERE aswl.warehouse_id = w.id) AS total_items_stored,
+    (SELECT COUNT(*) FROM transactions t WHERE t.warehouse_id = w.id AND t.transaction_date_only = CURRENT_DATE AND t.transaction_type = 'inflow' AND t.is_active = true) AS today_inflow,
+    (SELECT COUNT(*) FROM transactions t WHERE t.warehouse_id = w.id AND t.transaction_date_only = CURRENT_DATE AND t.transaction_type = 'outflow' AND t.is_active = true) AS today_outflow,
+    (SELECT SUM(c.current_outstanding) FROM customers c WHERE c.warehouse_id = w.id AND c.is_active = true) AS total_outstanding,
+    (SELECT SUM(p.payment_amount) FROM payments p WHERE p.warehouse_id = w.id AND p.payment_date_only = CURRENT_DATE AND p.payment_status = 'completed') AS today_collections,
+    (SELECT COUNT(*) FROM storage_lots sl WHERE sl.warehouse_id = w.id AND sl.lot_status = 'full' AND sl.is_active = true) AS full_lots,
+    (SELECT SUM(sl.capacity) FROM storage_lots sl WHERE sl.warehouse_id = w.id AND sl.is_active = true) AS total_capacity,
+    (SELECT SUM(sl.current_occupancy) FROM storage_lots sl WHERE sl.warehouse_id = w.id AND sl.is_active = true) AS total_occupancy,
+    ROUND((SELECT SUM(sl.current_occupancy)::DECIMAL / NULLIF(SUM(sl.capacity), 0) * 100 FROM storage_lots sl WHERE sl.warehouse_id = w.id AND sl.is_active = true), 2) AS overall_utilization_percentage
+FROM warehouses w
+WHERE w.is_active = true AND w.deleted_at IS NULL;
+
+
+-- ================================================================================
+-- CHUNK 5: PERFORMANCE INDEXES
+-- ================================================================================
+
+CREATE INDEX IF NOT EXISTS idx_uwa_user_active ON user_warehouse_access(user_id) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_uwa_warehouse_active ON user_warehouse_access(warehouse_id) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_customers_warehouse_active ON customers(warehouse_id) WHERE is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_customers_phone_active ON customers(warehouse_id, customer_phone) WHERE is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_customers_outstanding_active ON customers(warehouse_id, current_outstanding) WHERE current_outstanding > 0 AND is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_customers_tags_gin ON customers USING gin (tags) WHERE is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_transactions_warehouse_active ON transactions(warehouse_id) WHERE is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_transactions_customer_active ON transactions(customer_id) WHERE is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_transactions_parent_active ON transactions(parent_transaction_id) WHERE transaction_type = 'outflow' AND is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_transactions_receipt_number ON transactions(warehouse_id, receipt_number) WHERE is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_transactions_warehouse_date_type_active ON transactions(warehouse_id, transaction_date_only, transaction_type) WHERE is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_payments_transaction ON payments(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_payments_warehouse_date_status ON payments(warehouse_id, payment_date_ist(payment_date), payment_status);
+CREATE INDEX IF NOT EXISTS idx_profiles_warehouse_active ON profiles(warehouse_id) WHERE is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_profiles_role_active ON profiles(user_role_id) WHERE is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_storage_lots_warehouse_active ON storage_lots(warehouse_id) WHERE is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_storage_lots_status_active ON storage_lots(lot_status) WHERE is_active = true AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_audit_logs_table_record ON audit_logs(table_name, record_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_date ON audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, expires_at) WHERE is_read = false;
+CREATE INDEX IF NOT EXISTS idx_otp_codes_phone_number ON otp_codes(phone_number);
+CREATE INDEX IF NOT EXISTS idx_otp_codes_expires_at ON otp_codes(expires_at);
+
+
+-- ================================================================================
+-- CHUNK 6: ROW LEVEL SECURITY (RLS)
+-- ================================================================================
+
+-- Enable RLS on all relevant tables
+ALTER TABLE warehouses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE storage_lots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE storage_rates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE transaction_lot_distribution ENABLE ROW LEVEL SECURITY;
+ALTER TABLE labor_charges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE otp_codes ENABLE ROW LEVEL SECURITY;
+
+
+-- Drop all existing policies to ensure a clean slate before applying new ones.
+DO $$
+DECLARE
+    policy_record RECORD;
+    table_record RECORD;
+BEGIN
+    FOR table_record IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+        FOR policy_record IN (SELECT policyname FROM pg_policies WHERE schemaname = 'public' AND tablename = table_record.tablename) LOOP
+            EXECUTE 'DROP POLICY IF EXISTS ' || quote_ident(policy_record.policyname) || ' ON public.' || quote_ident(table_record.tablename);
+        END LOOP;
+    END LOOP;
+END;
+$$;
+
+
+-- Helper function to check for SUPER_ADMIN role.
+CREATE OR REPLACE FUNCTION public.is_super_admin(user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    JOIN public.user_roles ur ON p.user_role_id = ur.id
+    WHERE p.id = user_id AND ur.role_code = 'SUPER_ADMIN'
+  );
+END;
+$$;
+
+CREATE POLICY "Allow warehouse access for members and super admins" ON warehouses FOR ALL USING (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND (deleted_at IS NULL AND EXISTS (SELECT 1 FROM get_user_warehouse_access(auth.uid()) ua WHERE ua.warehouse_id = warehouses.id OR ua.access_level = 'all'))
+    )
+);
+
+CREATE POLICY "Users can manage profiles, super admins can manage all" ON profiles FOR ALL USING (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND (deleted_at IS NULL AND (id = auth.uid() OR EXISTS (SELECT 1 FROM get_user_warehouse_access(auth.uid()) ua WHERE ua.warehouse_id = profiles.warehouse_id AND ua.access_level IN ('all', 'full'))))
+    )
+) WITH CHECK (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND (deleted_at IS NULL AND (id = auth.uid() OR EXISTS (SELECT 1 FROM get_user_warehouse_access(auth.uid()) ua WHERE ua.warehouse_id = profiles.warehouse_id AND ua.access_level IN ('all', 'full'))))
+    )
+);
+
+CREATE POLICY "Allow public read access to active warehouses for signup" ON warehouses FOR SELECT USING (
+    is_active = true AND deleted_at IS NULL
+);
+
+CREATE POLICY "Allow access to customers for members or super admins" ON customers FOR ALL USING (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM get_user_warehouse_access(auth.uid()) ua WHERE ua.warehouse_id = customers.warehouse_id)
+    )
+);
+
+CREATE POLICY "Allow access to lots for members or super admins" ON storage_lots FOR ALL USING (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM get_user_warehouse_access(auth.uid()) ua WHERE ua.warehouse_id = storage_lots.warehouse_id)
+    )
+);
+
+CREATE POLICY "Allow access to products for members or super admins" ON products FOR ALL USING (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM get_user_warehouse_access(auth.uid()) ua WHERE ua.warehouse_id = products.warehouse_id)
+    )
+);
+
+CREATE POLICY "Allow access to rates for members or super admins" ON storage_rates FOR ALL USING (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND EXISTS (SELECT 1 FROM get_user_warehouse_access(auth.uid()) ua WHERE ua.warehouse_id = storage_rates.warehouse_id)
+    )
+);
+
+CREATE POLICY "Allow access to transactions for members or super admins" ON transactions FOR ALL USING (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM get_user_warehouse_access(auth.uid()) ua WHERE ua.warehouse_id = transactions.warehouse_id)
+    )
+);
+
+CREATE POLICY "Allow access to lot distribution for members or super admins" ON transaction_lot_distribution FOR ALL USING (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND EXISTS (SELECT 1 FROM transactions t JOIN get_user_warehouse_access(auth.uid()) ua ON ua.warehouse_id = t.warehouse_id WHERE t.id = transaction_lot_distribution.transaction_id AND t.deleted_at IS NULL)
+    )
+);
+
+CREATE POLICY "Allow access to labor charges for members or super admins" ON labor_charges FOR ALL USING (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND EXISTS (SELECT 1 FROM get_user_warehouse_access(auth.uid()) ua WHERE ua.warehouse_id = labor_charges.warehouse_id)
+    )
+);
+
+CREATE POLICY "Allow access to payments for members or super admins" ON payments FOR ALL USING (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND EXISTS (SELECT 1 FROM get_user_warehouse_access(auth.uid()) ua WHERE ua.warehouse_id = payments.warehouse_id)
+    )
+);
+
+CREATE POLICY "Allow access to audit logs for admins or super admins" ON audit_logs FOR ALL USING (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND EXISTS (SELECT 1 FROM get_user_warehouse_access(auth.uid()) ua WHERE (ua.warehouse_id = audit_logs.warehouse_id OR ua.access_level = 'all') AND ua.access_level IN ('all', 'full'))
+    )
+);
+
+CREATE POLICY "Allow access to notifications for users or super admins" ON notifications FOR ALL USING (
+    public.is_super_admin(auth.uid()) OR (
+        auth.uid() IS NOT NULL AND (user_id = auth.uid() OR EXISTS (SELECT 1 FROM get_user_warehouse_access(auth.uid()) ua WHERE ua.warehouse_id = notifications.warehouse_id AND ua.access_level IN ('all', 'full')))
+    )
+);
+
+CREATE POLICY "Allow all operations on otp_codes for authenticated users" ON otp_codes FOR ALL USING (auth.role() = 'authenticated');
+
+-- ================================================================================
+-- CHUNK 7: INITIAL DATA SEEDING
+-- ================================================================================
+
+INSERT INTO user_roles (role_code, role_name, role_description, hierarchy_level) VALUES
+('SUPER_ADMIN', 'Super Administrator', 'System-wide access across all warehouses', 1),
+('ADMIN', 'Administrator', 'Full warehouse management access', 2),
+('MANAGER', 'Manager', 'Warehouse management and supervision', 3),
+('ACCOUNTANT', 'Accountant', 'Financial and payment management', 4),
+('OPERATOR', 'Warehouse Operator', 'Day-to-day warehouse operations', 5),
+('FARMER', 'Farmer', 'Role for farmers interacting with warehouse', 6)
+ON CONFLICT (role_code) DO UPDATE SET
+  role_name = EXCLUDED.role_name,
+  role_description = EXCLUDED.role_description,
+  hierarchy_level = EXCLUDED.hierarchy_level;
+
+INSERT INTO warehouses (warehouse_name, warehouse_code, warehouse_address, warehouse_contact, default_storage_rate, default_labor_rate, gst_number)
+VALUES (
+    'Main Storage Warehouse',
+    'MSW001',
+    '{"street": "123 Industrial Area", "city": "Hyderabad", "state": "Telangana", "pincode": "500001", "country": "India"}',
+    '{"phone": "+91-9876543210", "email": "contact@msw001.com"}',
+    2.50,
+    5.00,
+    '36ABCDE1234F1Z5'
+) ON CONFLICT (warehouse_code) DO NOTHING;
+
+INSERT INTO storage_lots (warehouse_id, lot_name, capacity, lot_type, lot_description)
+SELECT id, 'A-Block', 2000, 'standard', 'Main storage area for general goods' FROM warehouses WHERE warehouse_code = 'MSW001'
+UNION ALL
+SELECT id, 'B-Block', 1500, 'premium', 'Premium storage with better security' FROM warehouses WHERE warehouse_code = 'MSW001'
+UNION ALL
+SELECT id, 'C-Block', 1000, 'cold_storage', 'Temperature controlled storage' FROM warehouses WHERE warehouse_code = 'MSW001'
+ON CONFLICT (warehouse_id, lot_name) DO NOTHING;
+
+-- ================================================================================
+-- CHUNK 8: ONE-TIME MIGRATION SCRIPTS
+-- ================================================================================
+-- This script is for backfilling employee IDs for existing profiles that don't have one.
+-- It should be run once after the main schema is in place.
+
+/*
+-- Update profiles with generated employee IDs
+UPDATE profiles 
+SET employee_id = (
+    SELECT w.warehouse_initials || TO_CHAR(p.created_at, 'YYMMDD') || 
+           LPAD(ROW_NUMBER() OVER (PARTITION BY p.warehouse_id ORDER BY p.created_at)::TEXT, 4, '0')
+    FROM profiles p
+    JOIN warehouses w ON p.warehouse_id = w.id
+    WHERE p.id = profiles.id
+)
+WHERE employee_id IS NULL;
+*/
+
+

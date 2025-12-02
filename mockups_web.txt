@@ -1,0 +1,712 @@
+import React, { useState, useEffect } from 'react';
+import {
+    LayoutDashboard,
+    Package,
+    Users,
+    Settings,
+    Search,
+    Bell,
+    CheckCircle,
+    AlertTriangle,
+    Warehouse,
+    CreditCard,
+    User,
+    Loader,
+    TrendingUp,
+    DollarSign,
+    BarChart3,
+    PieChart,
+    Box,
+    MoreHorizontal,
+    Filter,
+    Download,
+    Plus,
+    ArrowUpRight,
+    ArrowDownLeft,
+    ChevronRight,
+    LogOut,
+    Menu,
+    X,
+    MapPin,
+    Calendar,
+    FileText
+} from 'lucide-react';
+
+// --- THEME CONSTANTS ---
+const THEME = {
+    colors: {
+        bg: 'bg-slate-950',
+        sidebar: 'bg-slate-900',
+        surface: 'bg-slate-800',
+        surfaceHover: 'hover:bg-slate-700',
+        primary: 'bg-teal-500',
+        primaryHover: 'hover:bg-teal-600',
+        text: 'text-slate-100',
+        textDim: 'text-slate-400',
+        border: 'border-slate-700'
+    }
+};
+
+// --- MOCK DATA ---
+const MOCK_DATA = {
+    stats: [
+        { label: 'Total Inventory', value: '1,240 tons', change: '+12%', icon: Package, color: 'text-blue-400' },
+        { label: 'Total Revenue', value: '$45,200', change: '+8.5%', icon: DollarSign, color: 'text-teal-400' },
+        { label: 'Active Clients', value: '48', change: '+2', icon: Users, color: 'text-purple-400' },
+        { label: 'Occupancy', value: '78%', change: '-3%', icon: Warehouse, color: 'text-orange-400' },
+    ],
+    inventory: [
+        { id: 1, name: 'Steel Beams', category: 'Construction', stock: '500 tons', location: 'Zone A-12', status: 'In Stock', lastUpdated: '2h ago' },
+        { id: 2, name: 'Copper Wire', category: 'Raw Material', stock: '120 kg', location: 'Zone B-04', status: 'Low Stock', lastUpdated: '5h ago' },
+        { id: 3, name: 'Industrial Pumps', category: 'Machinery', stock: '15 units', location: 'Zone C-01', status: 'In Stock', lastUpdated: '1d ago' },
+        { id: 4, name: 'Solar Panels', category: 'Electronics', stock: '200 units', location: 'Zone A-08', status: 'Reserved', lastUpdated: '3d ago' },
+        { id: 5, name: 'Cement Bags', category: 'Construction', stock: '1000 units', location: 'Zone D-10', status: 'In Stock', lastUpdated: '1w ago' },
+    ],
+    transactions: [
+        { id: 'TRX-9821', type: 'Inflow', client: 'Acme Corp', item: 'Steel Beams', qty: '50 tons', date: 'Oct 24, 2025', amount: '$2,500' },
+        { id: 'TRX-9822', type: 'Outflow', client: 'Global Const.', item: 'Cement Bags', qty: '200 units', date: 'Oct 23, 2025', amount: '$800' },
+        { id: 'TRX-9823', type: 'Inflow', client: 'SolarTech Inc', item: 'Solar Panels', qty: '50 units', date: 'Oct 22, 2025', amount: '$12,000' },
+    ],
+    warehouses: [
+        { id: 1, name: 'Main Distribution Hub', location: 'New York, NY', capacity: 2000, used: 1500, zones: 12 },
+        { id: 2, name: 'East Side Storage', location: 'Queens, NY', capacity: 1000, used: 450, zones: 8 },
+        { id: 3, name: 'Cold Storage Unit', location: 'Jersey City, NJ', capacity: 500, used: 300, zones: 4 },
+    ],
+    customers: [
+        { id: 1, name: 'Acme Corp', email: 'contact@acme.com', phone: '+1 555-0101', balance: -450, status: 'Active' },
+        { id: 2, name: 'Global Construction', email: 'billing@globalconst.com', phone: '+1 555-0102', balance: 0, status: 'Active' },
+        { id: 3, name: 'SolarTech Inc', email: 'supply@solartech.com', phone: '+1 555-0103', balance: -1200, status: 'Overdue' },
+    ]
+};
+
+// --- COMPONENTS ---
+
+const Sidebar = ({ activeTab, setActiveTab }) => {
+    const menuItems = [
+        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        { id: 'inventory', label: 'Inventory', icon: Package },
+        { id: 'warehouses', label: 'Warehouses', icon: Warehouse },
+        { id: 'customers', label: 'Customers', icon: Users },
+        { id: 'reports', label: 'Reports', icon: BarChart3 },
+        { id: 'settings', label: 'Settings', icon: Settings },
+    ];
+
+    return (
+        <div className={`w-64 ${THEME.colors.sidebar} border-r ${THEME.colors.border} flex flex-col h-screen fixed left-0 top-0 z-20`}>
+            {/* Brand */}
+            <div className="h-16 flex items-center px-6 border-b border-slate-800">
+                <div className="w-8 h-8 bg-teal-500 rounded-lg flex items-center justify-center mr-3">
+                    <Package className="text-white" size={20} />
+                </div>
+                <span className="text-xl font-bold text-white tracking-tight">Stokify<span className="text-teal-500">.</span></span>
+            </div>
+
+            {/* Navigation */}
+            <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4 px-2 mt-4">Main Menu</div>
+                {menuItems.map((item) => (
+                    <button
+                        key={item.id}
+                        onClick={() => setActiveTab(item.id)}
+                        className={`w-full flex items-center px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${activeTab === item.id
+                                ? 'bg-teal-500/10 text-teal-400'
+                                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                            }`}
+                    >
+                        <item.icon size={18} className="mr-3" />
+                        {item.label}
+                    </button>
+                ))}
+
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-4 px-2 mt-8">Workspace</div>
+                <button className="w-full flex items-center px-3 py-2 rounded-lg text-sm font-medium text-slate-400 hover:bg-slate-800 hover:text-slate-200">
+                    <CreditCard size={18} className="mr-3" /> Billing & Invoices
+                </button>
+            </nav>
+
+            {/* User Profile */}
+            <div className="p-4 border-t border-slate-800">
+                <div className="flex items-center p-2 rounded-lg hover:bg-slate-800 cursor-pointer transition-colors">
+                    <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-slate-300 font-bold border border-slate-600">
+                        JD
+                    </div>
+                    <div className="ml-3 flex-1 overflow-hidden">
+                        <p className="text-sm font-medium text-white truncate">John Doe</p>
+                        <p className="text-xs text-slate-500 truncate">Admin</p>
+                    </div>
+                    <LogOut size={16} className="text-slate-500 hover:text-red-400" />
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const Header = ({ onNewTransaction }) => (
+    <header className={`h-16 ${THEME.colors.sidebar} border-b ${THEME.colors.border} flex items-center justify-between px-8 fixed top-0 right-0 left-64 z-10`}>
+        {/* Search */}
+        <div className="relative w-96">
+            <Search className="absolute left-3 top-2.5 text-slate-500" size={18} />
+            <input
+                type="text"
+                placeholder="Search inventory, orders, or clients..."
+                className="w-full bg-slate-950 border border-slate-700 text-slate-200 text-sm rounded-lg pl-10 pr-4 py-2 focus:outline-none focus:border-teal-500 transition-colors"
+            />
+        </div>
+
+        {/* Right Actions */}
+        <div className="flex items-center space-x-4">
+            <button className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-full relative">
+                <Bell size={20} />
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border border-slate-900"></span>
+            </button>
+            <div className="h-6 w-px bg-slate-700 mx-2"></div>
+            <button
+                onClick={onNewTransaction}
+                className="bg-teal-500 hover:bg-teal-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center shadow-lg shadow-teal-500/20 transition-all active:scale-95"
+            >
+                <Plus size={16} className="mr-2" /> New Transaction
+            </button>
+        </div>
+    </header>
+);
+
+const TransactionModal = ({ isOpen, onClose }) => {
+    const [type, setType] = useState('inflow'); // inflow | outflow
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className={`w-full max-w-lg ${THEME.colors.surface} rounded-2xl border ${THEME.colors.border} shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200`}>
+                <div className="px-6 py-4 border-b border-slate-700 flex justify-between items-center">
+                    <h3 className="text-lg font-bold text-white">New Transaction</h3>
+                    <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20} /></button>
+                </div>
+
+                <div className="p-6 space-y-4">
+                    {/* Toggle Type */}
+                    <div className="flex bg-slate-900 p-1 rounded-xl mb-4">
+                        <button
+                            onClick={() => setType('inflow')}
+                            className={`flex-1 py-2 text-sm font-medium rounded-lg flex items-center justify-center transition-all ${type === 'inflow' ? 'bg-teal-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+                        >
+                            <ArrowDownLeft size={16} className="mr-2" /> Stock In
+                        </button>
+                        <button
+                            onClick={() => setType('outflow')}
+                            className={`flex-1 py-2 text-sm font-medium rounded-lg flex items-center justify-center transition-all ${type === 'outflow' ? 'bg-red-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+                        >
+                            <ArrowUpRight size={16} className="mr-2" /> Stock Out
+                        </button>
+                    </div>
+
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-slate-400 text-xs font-bold uppercase mb-1">Customer</label>
+                            <select className="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-4 py-2.5 outline-none focus:border-teal-500">
+                                <option>Select Customer...</option>
+                                <option>Acme Corp</option>
+                                <option>Global Construction</option>
+                            </select>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-slate-400 text-xs font-bold uppercase mb-1">Item Name</label>
+                                <input type="text" className="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-4 py-2.5 outline-none focus:border-teal-500" placeholder="e.g. Steel" />
+                            </div>
+                            <div>
+                                <label className="block text-slate-400 text-xs font-bold uppercase mb-1">Quantity</label>
+                                <input type="number" className="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-4 py-2.5 outline-none focus:border-teal-500" placeholder="0" />
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="block text-slate-400 text-xs font-bold uppercase mb-1">Warehouse Zone</label>
+                            <select className="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-4 py-2.5 outline-none focus:border-teal-500">
+                                <option>Auto-assign (Recommended)</option>
+                                <option>Zone A-01</option>
+                                <option>Zone B-04</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    {/* Summary Box */}
+                    <div className="bg-slate-900/50 p-4 rounded-xl border border-dashed border-slate-700 mt-4">
+                        <div className="flex justify-between text-sm mb-1">
+                            <span className="text-slate-400">Rate per day</span>
+                            <span className="text-white font-mono">$10.00</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                            <span className="text-slate-400">Handling Fee</span>
+                            <span className="text-white font-mono">$25.00</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="px-6 py-4 bg-slate-900/50 border-t border-slate-700 flex justify-end space-x-3">
+                    <button onClick={onClose} className="px-4 py-2 text-slate-400 hover:text-white font-medium">Cancel</button>
+                    <button className={`px-6 py-2 text-white font-medium rounded-lg shadow-lg ${type === 'inflow' ? 'bg-teal-500 hover:bg-teal-600' : 'bg-red-500 hover:bg-red-600'}`}>
+                        Confirm {type === 'inflow' ? 'Inflow' : 'Release'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const StatCard = ({ item }) => (
+    <div className={`${THEME.colors.surface} p-6 rounded-xl border ${THEME.colors.border} hover:border-teal-500/50 transition-all cursor-default`}>
+        <div className="flex justify-between items-start mb-4">
+            <div className={`p-2 rounded-lg bg-slate-900/50 ${item.color}`}>
+                <item.icon size={22} />
+            </div>
+            <span className={`text-xs font-bold px-2 py-1 rounded-full ${item.change.startsWith('+') ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                {item.change}
+            </span>
+        </div>
+        <div className="text-3xl font-bold text-white mb-1">{item.value}</div>
+        <div className="text-sm text-slate-500">{item.label}</div>
+    </div>
+);
+
+const DashboardView = () => (
+    <div className="space-y-6 animate-in fade-in duration-500">
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {MOCK_DATA.stats.map((stat, idx) => <StatCard key={idx} item={stat} />)}
+        </div>
+
+        {/* Charts & Tables Split */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Main Chart Area */}
+            <div className={`lg:col-span-2 ${THEME.colors.surface} rounded-xl border ${THEME.colors.border} p-6`}>
+                <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-lg font-bold text-white">Stock Movement</h3>
+                    <select className="bg-slate-900 border border-slate-700 text-slate-300 text-sm rounded-lg px-3 py-1 outline-none">
+                        <option>Last 7 Days</option>
+                        <option>Last 30 Days</option>
+                        <option>This Year</option>
+                    </select>
+                </div>
+
+                {/* Mock Chart Visualization */}
+                <div className="h-64 flex items-end justify-between space-x-2 px-4">
+                    {[45, 60, 35, 70, 55, 80, 65, 50, 75, 60, 85, 90].map((h, i) => (
+                        <div key={i} className="w-full bg-slate-700/30 rounded-t-sm relative group hover:bg-slate-700/50 transition-colors cursor-pointer">
+                            <div
+                                className="absolute bottom-0 w-full bg-teal-500 rounded-t-sm transition-all duration-500 group-hover:bg-teal-400"
+                                style={{ height: `${h}%` }}
+                            ></div>
+                            {/* Tooltip */}
+                            <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap border border-slate-700">
+                                {h} Tons
+                            </div>
+                        </div>
+                    ))}
+                </div>
+                <div className="flex justify-between mt-4 text-xs text-slate-500 border-t border-slate-700 pt-2">
+                    <span>Jan</span><span>Feb</span><span>Mar</span><span>Apr</span><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span><span>Sep</span><span>Oct</span><span>Nov</span><span>Dec</span>
+                </div>
+            </div>
+
+            {/* Warehouse Status */}
+            <div className={`${THEME.colors.surface} rounded-xl border ${THEME.colors.border} p-6`}>
+                <h3 className="text-lg font-bold text-white mb-6">Warehouse Capacity</h3>
+                <div className="space-y-6">
+                    {MOCK_DATA.warehouses.map((w, i) => (
+                        <div key={i}>
+                            <div className="flex justify-between text-sm mb-2">
+                                <span className="text-slate-300">{w.name}</span>
+                                <span className="text-slate-400 font-mono">{((w.used / w.capacity) * 100).toFixed(0)}%</span>
+                            </div>
+                            <div className="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
+                                <div className={`h-full ${i === 0 ? 'bg-red-500' : 'bg-teal-500'}`} style={{ width: `${(w.used / w.capacity) * 100}%` }}></div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+                <button className="w-full mt-8 py-2 border border-slate-600 rounded-lg text-sm text-slate-300 hover:text-white hover:border-slate-500 transition-colors">
+                    View All Warehouses
+                </button>
+            </div>
+        </div>
+
+        {/* Recent Transactions Table */}
+        <div className={`${THEME.colors.surface} rounded-xl border ${THEME.colors.border} overflow-hidden`}>
+            <div className="p-6 border-b border-slate-700 flex justify-between items-center">
+                <h3 className="text-lg font-bold text-white">Recent Transactions</h3>
+                <button className="text-teal-400 text-sm font-medium hover:text-teal-300 flex items-center">
+                    View All <ChevronRight size={16} />
+                </button>
+            </div>
+            <table className="w-full text-left text-sm">
+                <thead className="bg-slate-900/50 text-slate-400 font-medium">
+                    <tr>
+                        <th className="px-6 py-3">Transaction ID</th>
+                        <th className="px-6 py-3">Type</th>
+                        <th className="px-6 py-3">Client</th>
+                        <th className="px-6 py-3">Item</th>
+                        <th className="px-6 py-3">Amount</th>
+                        <th className="px-6 py-3">Date</th>
+                        <th className="px-6 py-3">Status</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700">
+                    {MOCK_DATA.transactions.map((t, i) => (
+                        <tr key={i} className="hover:bg-slate-700/30 transition-colors group">
+                            <td className="px-6 py-4 font-mono text-slate-300 group-hover:text-teal-400">{t.id}</td>
+                            <td className="px-6 py-4">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${t.type === 'Inflow' ? 'bg-green-500/10 text-green-400' : 'bg-orange-500/10 text-orange-400'}`}>
+                                    {t.type === 'Inflow' ? <ArrowDownLeft size={12} className="mr-1" /> : <ArrowUpRight size={12} className="mr-1" />}
+                                    {t.type}
+                                </span>
+                            </td>
+                            <td className="px-6 py-4 text-white">{t.client}</td>
+                            <td className="px-6 py-4 text-slate-300">
+                                {t.item} <span className="text-slate-500 ml-1">({t.qty})</span>
+                            </td>
+                            <td className="px-6 py-4 text-white font-medium">{t.amount}</td>
+                            <td className="px-6 py-4 text-slate-400">{t.date}</td>
+                            <td className="px-6 py-4">
+                                <span className="flex items-center text-green-400 text-xs">
+                                    <CheckCircle size={12} className="mr-1" /> Completed
+                                </span>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    </div>
+);
+
+const WarehousesView = () => (
+    <div className="space-y-6 animate-in fade-in duration-500">
+        <div className="flex items-center justify-between">
+            <div>
+                <h2 className="text-2xl font-bold text-white">Warehouses</h2>
+                <p className="text-slate-400 text-sm">Manage storage facilities and lots.</p>
+            </div>
+            <button className="bg-teal-500 hover:bg-teal-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center shadow-lg shadow-teal-500/20">
+                <Plus size={16} className="mr-2" /> Add Warehouse
+            </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {MOCK_DATA.warehouses.map((w, i) => (
+                <div key={i} className={`${THEME.colors.surface} rounded-xl border ${THEME.colors.border} overflow-hidden hover:border-teal-500/50 transition-all group`}>
+                    <div className="h-32 bg-slate-900 relative">
+                        <div className="absolute inset-0 bg-gradient-to-t from-slate-900 to-transparent"></div>
+                        <div className="absolute bottom-4 left-4">
+                            <h3 className="text-lg font-bold text-white">{w.name}</h3>
+                            <div className="flex items-center text-xs text-slate-400">
+                                <MapPin size={12} className="mr-1" /> {w.location}
+                            </div>
+                        </div>
+                        <div className="absolute top-4 right-4 bg-slate-800/80 backdrop-blur px-2 py-1 rounded text-xs text-white font-medium border border-slate-700">
+                            Active
+                        </div>
+                    </div>
+                    <div className="p-6">
+                        <div className="flex justify-between items-end mb-2">
+                            <span className="text-slate-400 text-sm">Capacity</span>
+                            <span className="text-white font-mono font-bold">{w.used} / {w.capacity}</span>
+                        </div>
+                        <div className="w-full bg-slate-700 h-2 rounded-full overflow-hidden mb-6">
+                            <div className="bg-teal-500 h-full" style={{ width: `${(w.used / w.capacity) * 100}%` }}></div>
+                        </div>
+
+                        <h4 className="text-xs font-bold text-slate-500 uppercase mb-3">Storage Zones</h4>
+                        <div className="grid grid-cols-6 gap-2">
+                            {[...Array(w.zones)].map((_, z) => (
+                                <div key={z} className={`aspect-square rounded flex items-center justify-center text-[10px] font-bold cursor-pointer transition-colors ${z < 5 ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30 hover:bg-teal-500/40' : 'bg-slate-700/50 text-slate-500 border border-slate-700 hover:bg-slate-700'}`}>
+                                    {String.fromCharCode(65 + z)}
+                                </div>
+                            ))}
+                        </div>
+
+                        <button className="w-full mt-6 py-2 border border-slate-600 rounded-lg text-sm text-slate-300 hover:text-white hover:border-slate-500 transition-colors">
+                            Manage Lots
+                        </button>
+                    </div>
+                </div>
+            ))}
+        </div>
+    </div>
+);
+
+const CustomersView = () => (
+    <div className="space-y-6 animate-in fade-in duration-500">
+        <div className="flex items-center justify-between">
+            <div>
+                <h2 className="text-2xl font-bold text-white">Customers</h2>
+                <p className="text-slate-400 text-sm">Client directory and balances.</p>
+            </div>
+            <button className="bg-teal-500 hover:bg-teal-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center shadow-lg shadow-teal-500/20">
+                <Plus size={16} className="mr-2" /> Add Client
+            </button>
+        </div>
+
+        <div className={`${THEME.colors.surface} rounded-xl border ${THEME.colors.border} overflow-hidden`}>
+            <table className="w-full text-left text-sm">
+                <thead className="bg-slate-900/50 text-slate-400 font-medium border-b border-slate-700">
+                    <tr>
+                        <th className="px-6 py-4">Client Name</th>
+                        <th className="px-6 py-4">Contact</th>
+                        <th className="px-6 py-4">Balance</th>
+                        <th className="px-6 py-4">Status</th>
+                        <th className="px-6 py-4 text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700">
+                    {MOCK_DATA.customers.map((c, i) => (
+                        <tr key={i} className="hover:bg-slate-700/30 transition-colors">
+                            <td className="px-6 py-4">
+                                <div className="flex items-center">
+                                    <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center mr-3 text-slate-300 font-bold border border-slate-600">
+                                        {c.name.substring(0, 2).toUpperCase()}
+                                    </div>
+                                    <div>
+                                        <div className="font-medium text-white">{c.name}</div>
+                                        <div className="text-xs text-slate-500">ID: #{100 + c.id}</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td className="px-6 py-4">
+                                <div className="text-slate-300">{c.email}</div>
+                                <div className="text-xs text-slate-500">{c.phone}</div>
+                            </td>
+                            <td className="px-6 py-4">
+                                <span className={`font-mono font-medium ${c.balance < 0 ? 'text-red-400' : 'text-slate-300'}`}>
+                                    {c.balance < 0 ? `-$${Math.abs(c.balance)}` : `$${c.balance}`}
+                                </span>
+                            </td>
+                            <td className="px-6 py-4">
+                                <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${c.status === 'Active' ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                                    {c.status}
+                                </span>
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                                <button className="text-slate-400 hover:text-white p-2 hover:bg-slate-700 rounded-lg">View Profile</button>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    </div>
+);
+
+const ReportsView = () => (
+    <div className="space-y-6 animate-in fade-in duration-500">
+        <div className="flex items-center justify-between">
+            <div>
+                <h2 className="text-2xl font-bold text-white">Reports & Analytics</h2>
+                <p className="text-slate-400 text-sm">Deep dive into business performance.</p>
+            </div>
+            <div className="flex space-x-2">
+                <select className="bg-slate-900 border border-slate-700 text-slate-300 text-sm rounded-lg px-3 py-2 outline-none">
+                    <option>Last 30 Days</option>
+                    <option>Q3 2025</option>
+                    <option>Year to Date</option>
+                </select>
+                <button className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
+                    Download PDF
+                </button>
+            </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-6">
+            <div className={`${THEME.colors.surface} p-6 rounded-xl border ${THEME.colors.border}`}>
+                <h3 className="text-white font-bold mb-4 flex items-center"><DollarSign size={18} className="mr-2 text-teal-500" /> Revenue Trends</h3>
+                <div className="h-48 flex items-end justify-between space-x-2">
+                    {[30, 45, 60, 50, 70, 40, 55, 65, 80, 75, 90, 85].map((h, i) => (
+                        <div key={i} className="flex-1 bg-teal-500/20 rounded-t hover:bg-teal-500/40 transition-colors relative group">
+                            <div className="absolute bottom-0 w-full bg-teal-500 rounded-t" style={{ height: `${h}%` }}></div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+            <div className={`${THEME.colors.surface} p-6 rounded-xl border ${THEME.colors.border}`}>
+                <h3 className="text-white font-bold mb-4 flex items-center"><Package size={18} className="mr-2 text-blue-500" /> Stock Turnover</h3>
+                <div className="h-48 flex items-center justify-center">
+                    <div className="relative w-32 h-32 rounded-full border-8 border-slate-700 border-t-blue-500 border-r-blue-500 rotate-45">
+                        <div className="absolute inset-0 flex items-center justify-center flex-col -rotate-45">
+                            <span className="text-2xl font-bold text-white">85%</span>
+                            <span className="text-xs text-slate-500">Turnover</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+);
+
+const InventoryView = () => (
+    <div className="space-y-6 animate-in fade-in duration-500">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+                <h2 className="text-2xl font-bold text-white">Inventory Management</h2>
+                <p className="text-slate-400 text-sm">Track and manage your stock across all warehouses.</p>
+            </div>
+            <div className="flex space-x-3">
+                <button className="bg-slate-800 text-slate-300 hover:text-white px-4 py-2 rounded-lg text-sm border border-slate-700 flex items-center">
+                    <Download size={16} className="mr-2" /> Export
+                </button>
+                <button className="bg-teal-500 hover:bg-teal-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center shadow-lg shadow-teal-500/20">
+                    <Plus size={16} className="mr-2" /> Add Product
+                </button>
+            </div>
+        </div>
+
+        {/* Filters */}
+        <div className={`p-4 rounded-xl ${THEME.colors.surface} border ${THEME.colors.border} flex flex-wrap gap-4 items-center`}>
+            <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-2.5 text-slate-500" size={18} />
+                <input
+                    type="text"
+                    placeholder="Filter by name, SKU, or category..."
+                    className="w-full bg-slate-900 border border-slate-700 text-slate-200 text-sm rounded-lg pl-10 pr-4 py-2 focus:outline-none focus:border-teal-500"
+                />
+            </div>
+            <div className="flex gap-3">
+                <select className="bg-slate-900 border border-slate-700 text-slate-300 text-sm rounded-lg px-4 py-2 outline-none">
+                    <option>All Categories</option>
+                    <option>Construction</option>
+                    <option>Electronics</option>
+                </select>
+                <select className="bg-slate-900 border border-slate-700 text-slate-300 text-sm rounded-lg px-4 py-2 outline-none">
+                    <option>All Warehouses</option>
+                    <option>Main Hub</option>
+                    <option>East Storage</option>
+                </select>
+                <button className="p-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600">
+                    <Filter size={20} />
+                </button>
+            </div>
+        </div>
+
+        {/* Inventory Grid/Table */}
+        <div className={`${THEME.colors.surface} rounded-xl border ${THEME.colors.border} overflow-hidden`}>
+            <table className="w-full text-left text-sm">
+                <thead className="bg-slate-900/50 text-slate-400 font-medium border-b border-slate-700">
+                    <tr>
+                        <th className="px-6 py-4">Item Name</th>
+                        <th className="px-6 py-4">Category</th>
+                        <th className="px-6 py-4">Current Stock</th>
+                        <th className="px-6 py-4">Location</th>
+                        <th className="px-6 py-4">Status</th>
+                        <th className="px-6 py-4">Last Updated</th>
+                        <th className="px-6 py-4 text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700">
+                    {MOCK_DATA.inventory.map((item, i) => (
+                        <tr key={i} className="hover:bg-slate-700/30 transition-colors">
+                            <td className="px-6 py-4">
+                                <div className="flex items-center">
+                                    <div className="w-8 h-8 rounded bg-slate-700 flex items-center justify-center mr-3 text-slate-400">
+                                        <Box size={16} />
+                                    </div>
+                                    <span className="font-medium text-white">{item.name}</span>
+                                </div>
+                            </td>
+                            <td className="px-6 py-4 text-slate-300">{item.category}</td>
+                            <td className="px-6 py-4 font-mono text-white font-medium">{item.stock}</td>
+                            <td className="px-6 py-4 text-slate-400">{item.location}</td>
+                            <td className="px-6 py-4">
+                                <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${item.status === 'In Stock' ? 'bg-green-500/10 text-green-400' :
+                                        item.status === 'Low Stock' ? 'bg-red-500/10 text-red-400' :
+                                            'bg-yellow-500/10 text-yellow-400'
+                                    }`}>
+                                    {item.status}
+                                </span>
+                            </td>
+                            <td className="px-6 py-4 text-slate-500">{item.lastUpdated}</td>
+                            <td className="px-6 py-4 text-right">
+                                <button className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-700">
+                                    <MoreHorizontal size={18} />
+                                </button>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+            <div className="px-6 py-4 border-t border-slate-700 flex items-center justify-between text-sm text-slate-400">
+                <span>Showing 1-5 of 45 items</span>
+                <div className="flex space-x-2">
+                    <button className="px-3 py-1 border border-slate-700 rounded hover:bg-slate-700 disabled:opacity-50">Previous</button>
+                    <button className="px-3 py-1 border border-slate-700 rounded hover:bg-slate-700 text-white bg-slate-700">1</button>
+                    <button className="px-3 py-1 border border-slate-700 rounded hover:bg-slate-700">2</button>
+                    <button className="px-3 py-1 border border-slate-700 rounded hover:bg-slate-700">Next</button>
+                </div>
+            </div>
+        </div>
+    </div>
+);
+
+// --- MAIN LAYOUT ---
+
+export default function StokifyWebApp() {
+    const [activeTab, setActiveTab] = useState('dashboard');
+    const [loading, setLoading] = useState(true);
+    const [isTransactionModalOpen, setTransactionModalOpen] = useState(false);
+
+    // Simulate initial load
+    useEffect(() => {
+        setTimeout(() => setLoading(false), 1000);
+    }, []);
+
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+                <div className="flex flex-col items-center">
+                    <div className="w-16 h-16 bg-teal-500/20 rounded-full flex items-center justify-center mb-4 animate-pulse">
+                        <Package size={32} className="text-teal-500" />
+                    </div>
+                    <div className="text-slate-500 font-medium">Loading Dashboard...</div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex">
+            {/* Sidebar */}
+            <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+
+            {/* Main Content Wrapper */}
+            <div className="flex-1 ml-64 flex flex-col">
+                {/* Header */}
+                <Header onNewTransaction={() => setTransactionModalOpen(true)} />
+
+                {/* Scrollable Content Area */}
+                <main className="flex-1 mt-16 p-8 overflow-y-auto">
+                    {activeTab === 'dashboard' && <DashboardView />}
+                    {activeTab === 'inventory' && <InventoryView />}
+                    {activeTab === 'warehouses' && <WarehousesView />}
+                    {activeTab === 'customers' && <CustomersView />}
+                    {activeTab === 'reports' && <ReportsView />}
+
+                    {/* Settings Placeholder */}
+                    {activeTab === 'settings' && (
+                        <div className="flex flex-col items-center justify-center h-[60vh] text-slate-500 animate-in fade-in zoom-in duration-300">
+                            <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center mb-6">
+                                <Settings size={40} />
+                            </div>
+                            <h2 className="text-2xl font-bold text-white capitalize mb-2">Settings</h2>
+                            <p className="max-w-md text-center">Manage your profile, billing methods, and app configuration here.</p>
+                            <button onClick={() => setActiveTab('dashboard')} className="mt-6 px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition-colors">
+                                Return to Dashboard
+                            </button>
+                        </div>
+                    )}
+                </main>
+            </div>
+
+            {/* Transaction Modal */}
+            <TransactionModal isOpen={isTransactionModalOpen} onClose={() => setTransactionModalOpen(false)} />
+        </div>
+    );
+}
